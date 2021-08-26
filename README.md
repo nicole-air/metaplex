@@ -1,127 +1,128 @@
-<p align="center">
-  <a href="https://metaplex.com">
-    <img alt="Metaplex" src="https://metaplex.com/meta.svg" width="250" />
-  </a>
-</p>
+---
+title: Token Metadata Program
+---
 
-Metaplex is a protocol built on top of Solana that allows:
+## Background
 
-- **Creating/Minting** non-fungible tokens;
-- **Starting** a variety of auctions for primary/secondary sales;
-- and **Visualizing** NFTs in a standard way across wallets and applications.
+Solana's programming model and the definitions of the Solana terms used in this
+document are available at:
 
-Metaplex is comprised of two core components: an on-chain program, and a self-hosted front-end web3 application.
+- https://docs.solana.com/apps
+- https://docs.solana.com/terminology
 
-## In Depth Developer's Guide
+## Source
 
-If you want to deep dive on the Architecture, you can do so here:
+The Token Metadata Program's source is available on
+[github](https://github.com/metaplex-foundation/metaplex)
 
-https://www.notion.so/Metaplex-Developer-Guide-afefbc19841744c28587ab948a08cfac
+There is also an example Rust client located at
+[github](https://github.com/metaplex-foundation/metaplex/tree/master/token_metadata/test/src/main.rs)
+that can be perused for learning and run if desired with `cargo run --bin spl-token-metadata-test-client`. It allows testing out a variety of scenarios.
 
-## Installing
+## Interface
 
-Clone the repo, and run `yarn start` to deploy.
+The on-chain Token Metadata program is written in Rust and available on crates.io as
+[spl-token-metadata](https://crates.io/crates/spl-token-metadata) and
+[docs.rs](https://docs.rs/spl-token-metadata).
 
-```bash
-$ git clone https://github.com/metaplex-foundation/metaplex.git
-$ cd metaplex
-$ cd js
-$ yarn install
-$ yarn bootstrap
-$ yarn start
+The crate provides four instructions, `create_metadata_account()`, `update_metadata_account()`, `create_master_edition()`, `mint_new_edition_from_master_edition_via_token(),` to easily create instructions for the program.
+
+## Operational overview
+
+This is a very simple program designed to allow metadata tagging to a given mint, with an update authority
+that can change that metadata going forward. Optionally, owners of the metadata can choose to tag this metadata
+as a master edition and then use this master edition to label child mints as "limited editions" of this master
+edition going forward. The owners of the metadata do not need to be involved in every step of the process,
+as any holder of a master edition mint token can have their mint labeled as a limited edition without
+the involvement or signature of the owner, this allows for the sale and distribution of master edition prints.
+
+## Operational flow for Master Editions
+
+It would be useful before a dive into architecture to illustrate the flow for a master edition
+as a story because it makes it easier to understand.
+
+1. User creates a new Metadata for their mint with `create_metadata_account()` which makes new `Metadata`
+2. User wishes their mint to be a master edition and ensures that there
+   is only required supply of one in the mint.
+3. User requests the program to designate `create_master_edition()` on their metadata,
+   which creates new `MasterEdition` which for this example we will say has an unlimited supply. As
+   part of the arguments to the function the user is required to make a new mint called the Printing mint over
+   which they have minting authority that they tell the contract about and that the contract stores ont he
+   `MasterEdition`.
+4. User mints a token from the Printing mint and gives it to their friend.
+5. Their friend creates a new mint with supply 1 and calls `mint_new_edition_from_master_edition_via_token()`,
+   which creates for them new `Metadata` and `Edition` records signifying this mint as an Edition child of
+   the master edition original.
+
+There is a slight variation on this theme if `create_master_edition()` is given a max_supply: minting authority
+is locked within the program for the Printing mint and all minting takes place immediately in
+`create_master_edition()` to a designated account the user provides and owns -
+the user then uses this fixed pool as the source of their authorization tokens going forward to prevent new
+supply from being generated in an unauthorized manner.
+
+### Permissioning and Architecture
+
+There are three different major structs in the app: Metadata, MasterEditions, and Editions. A Metadata can
+have zero or one MasterEdition, OR can have zero or one Edition, but CANNOT have both a MasterEdition AND
+an Edition associated with it. This is to say a Metadata is EITHER a master edition
+or a edition(child record) of another master edition.
+
+Only the minting authority on a mint can create metadata accounts. A Metadata account holds the name, symbol,
+and uri of the mint, as well as the mint id. To ensure the uniqueness of
+a mint's metadata, the address of a Metadata account is a program derived address composed of seeds:
+
+```rust
+["metadata".as_bytes(), program_id.as_ref(), mint_key.as_ref()]
 ```
 
-## Rust Programs
+A master edition is an extension account of this PDA, being simply:
 
-The Rust programs will soon be added to this repo with JavaScript
-bindings that allow interactivity.
+```rust
+["metadata".as_bytes(), program_id.as_ref(), mint_key.as_ref(), "edition".as_bytes()]
+```
 
-## Community
+Any limited edition minted from this has the same address, but is of a different struct type. The reason
+these two different structs(Edition and MasterEdition) share the same address is to ensure that there can
+be no Metadata that has both, which would make no sense in the current architecture.
 
-We have a few channels for contact:
+### create_metadata_account
 
-- [Discord](https://discord.gg/metaplex)
-- [@metaplex](https://twitter.com/metaplex) on Twitter
-- [GitHub Issues](https://github.com/metaplex-foundation/metaplex/issues)
+(Mint authority must be signer)
 
-# Protocol
+This action creates the `Metadata` account.
 
-## Non-fungible tokens
+### update_metadata_account
 
-Metaplex's non-fungible-token standard is a part of the Solana Program Library (SPL), and can be characterized as a unique token with a fixed supply of 1 and 0 decimals. We extended the basic definition of an NFT on Solana to include additional metadata such as URI as defined in ERC-721 on Ethereum.
+(Update authority must be signer)
 
-Below are the types of NFTs that can be created using the Metaplex protocol.
+This call can be called at any time by the update authority to update the URI on any metadata or
+update authority on metadata, and later other fields.
 
-### **Master Edition**
+### create_master_edition
 
-A master edition token, when minted, represents both a non-fungible token on Solana and metadata that allows creators to control the provenance of prints created from the master edition.
+(Update authority must be signer)
 
-Rights to create prints are tokenized itself, and the owner of the master edition can distribute tokens that allow users to create prints from master editions. Additionally, the creator can set the max supply of the master edition just like a regular mint on Solana, with the main difference being that each print is a numbered edition created from it.
+This can only be called once, and only if the supply on the mint is one. It will create a `MasterEdition` record.
+Now other Mints can become Editions of this Metadata if they have the proper authorization token.
 
-A notable and desirable effect of master editions is that as prints are sold, the artwork will still remain visible in the artist's wallet as a master edition, while the prints appear in the purchaser's wallets.
+### mint_new_edition_from_master_edition_via_token
 
-### **Print**
+(Mint authority of new mint must be signer)
 
-A **print** represents a copy of an NFT, and is created from a Master Edition. Each print has an edition number associated with it.
+If one possesses a token from the Printing mint of the master edition and a brand new mint with no `Metadata`, and
+that mint has only a supply of one, this mint can be turned into an `Edition` of this parent `Master Edition` by
+calling this endpoint. This endpoint both creates the `Edition` and `Metadata` records and burns the token.
 
-Usually, prints are created as a part of an auction that has happened on Metaplex, but they could also be created by the creator manually.
+### Further extensions
 
-For limited auctions, each print number is awarded based on the bid placement.
+This program is designed to be extended with further account buckets.
 
-Prints can be created during [Open Edition](#open-edition) or [Limited Edition](#limited-edition) auction.
+If say, we wanted to add metadata for youtube metadata, we could create a new struct called Youtube
+and seed it with the seed
 
-### Normal NFT
+```rust
+["metadata".as_bytes(), program_id.as_ref(), mint_key.as_ref(), "youtube".as_bytes()]
+```
 
-A normal NFT (like a Master Edition) when minted represents a non-fungible token on Solana and metadata, but lacks rights to print.
-
-An example of a normal NFT would be an artwork that is a one-of-a-kind that, once sold, is no longer within the artist's own wallet, but is in the purchaser's wallet.
-
-## Types of Auctions
-
-Metaplex currently supports four types of auctions that are all derived from English auctions.
-
-Basic parameters include:
-
-- Auction start time
-- Auction end time
-- Reservation price
-
-Additionally, Metaplex includes a novel concept of the participation NFT. Each bidding participant can be rewarded a unique NFT for participating in the auction.
-
-The creator of an auction also has the ability to configure a minimal price that should be charged for redemption, with the option to set it as "free".
-
-### Single Item
-
-This type of auction can be used to sell normal NFTs and re-sell Prints, as well as the sale of Master Edition themselves (and the associated printing rights) if the artist so wishes. While this last behavior is not exposed in the current UI, it does exist in the protocol.
-
-### Open Edition
-
-An open edition auction requires the offering of a Master Edition NFT that specifically has no set supply. The auction will only create Prints of this item for bidders: each bidder is guaranteed to get a print, as there are no true "winners" of this auction type.
-
-An open edition auction can either have a set fixed price (equivalent to a Buy Now sale), can be set to the bid price (Pay what you want), or can be free (Make any bid to get it for free).
-
-### Limited Edition
-
-For a limited edition auction, a Master Edition NFT (of limited or unlimited supply) may be provided to the auction with a number of copies as the set amount of winning places.
-
-For each prize place, a Print will be minted in order of prize place, and awarded to the winning bidder of that place.
-
-For example, the first place winner will win Print #1; the second place winner Print #2; and so on.
-
-It is required for limited supply NFTs that there is at least as much supply remaining as there are desired winners in the auction.
-
-### Tiered Auction
-
-A tiered auction can contain a mix of the other three auction types as winning placements. For instance, the first place winner could win a Print of Limited Edition NFT A, while the second-place winner could win Normal NFT, and so on. Additionally, all participants who did not win any place could get a Participation NFT Print from a Master Edition (if the Master Edition had no supply limit).
-
-## Royalties
-
-Metaplex can seamlessly create on-chain artist splits that remove the awkwardness out of collaboration.
-
-Tag each collaborator, set custom percentages, and you’re off to the races. Each NFT can also be minted with configurable royalty payments that are then sent automatically back to the original creators whenever an artwork is resold on a Metaplex marketplace in the future.
-
-## Storefronts
-
-Metaplex's off-chain component allows creators to launch a custom storefront, similar to Shopify or WordPress. This open-source project provides a graphical interface to the on-chain Metaplex program, for creators, buyers, and curators of NFTs. The design and layout of storefronts can be customized to suit the needs of the entity creating it, either as a permanent storefront or an auction hub for a specific auction or collection.
-
-All identification on the Storefront is based on wallet addresses. Creators and store admins sign through their wallets, and users place bids from connected wallets. Custom storefronts allow creators to create unique experiences per auction. Additionally, the Metaplex Foundation is working on multiple partnerships that will enable building immersive storefronts using VR/AR.
+And then only those interested in that metadata need search for it, and its uniqueness is ensured. It can also
+have it's own update action that follows a similar pattern to the original update action.

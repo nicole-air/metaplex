@@ -324,26 +324,26 @@ pub fn transfer_mint_authority<'a>(
         accounts,
         &[],
     )?;
-    // msg!("Setting freeze authority");
-    // let freeze_authority = get_mint_freeze_authority(mint_info)?;
-    // if freeze_authority.is_some() {
-    //     invoke_signed(
-    //         &set_authority(
-    //             token_program_info.key,
-    //             mint_info.key,
-    //             Some(&edition_key),
-    //             AuthorityType::FreezeAccount,
-    //             mint_authority_info.key,
-    //             &[&mint_authority_info.key],
-    //         )
-    //         .unwrap(),
-    //         accounts,
-    //         &[],
-    //     )?;
-    //     msg!("Finished setting freeze authority");
-    // } else {
-    //     msg!("Skipping freeze authority because this mint has none")
-    // }
+    msg!("Setting freeze authority");
+    let freeze_authority = get_mint_freeze_authority(mint_info)?;
+    if freeze_authority.is_some() {
+        invoke_signed(
+            &set_authority(
+                token_program_info.key,
+                mint_info.key,
+                Some(&edition_key),
+                AuthorityType::FreezeAccount,
+                mint_authority_info.key,
+                &[&mint_authority_info.key],
+            )
+            .unwrap(),
+            accounts,
+            &[],
+        )?;
+        msg!("Finished setting freeze authority");
+    } else {
+        msg!("Skipping freeze authority because this mint has none")
+    }
 
     Ok(())
 }
